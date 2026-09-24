@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# pinentry-omarchy — Assuan pinentry implementation that draws its prompt
+# with the coelebs.pinentry Omarchy shell plugin.
+set -u
+
+title="Authentication"
+description=""
+prompt="Enter password"
+reply_program="$(dirname "$0")/pinentry-omarchy-reply"
+
+if ! command -v jq >/dev/null 2>&1; then
+  printf 'ERR 83886179 Operation cancelled\njq is required by pinentry-omarchy\n' 2>&1
+  exit 1
+fi
+
+decode() {
+  local value=${1-}
+  printf '%b' "${value//%/\\x}"
+}
+
+encode() {
+  local value=$1
+  value=${value//%/%25}
+  value=${value//$'\r'/%0D}
+  value=${value//$'\n'/%0A}
+  printf '%s' "$value"
+}
+
+reply() {
+  local reply_dir reply_file password status summon_result payload
+  reply_dir=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/pinentry-omarchy.XXXXXX") || return 1
+  reply_file="$reply_dir/reply"
+  payload=$(jq -cn \
+    --arg replyFile "$reply_file" \
+    --arg replyProgram "$reply_program" \
+    --arg title "$title" \
+    --arg description "$description" \
+    --arg prompt "$prompt" \
+    '{replyFile: $replyFile, replyProgram: $replyProgram, title: $title, description: $description, prompt: $prompt}') || {
+      rm -rf "$reply_dir"
+      return 1
+    }
+
+  summon_result=$(omarchy-shell shell summon coelebs.pinentry "$payload" 2>/dev/null)
+  status=$?
+  while [[ $status -eq 0 && $summon_result == "ok" && ! -f $reply_file ]]; do
+    sleep 0.05
+  done
+
+  if [[ $status -eq 0 && -f $reply_file ]]; then
+    password=$(<"$reply_file")
+    rm -rf "$reply_dir"
+    printf 'D %s\nOK\n' "$(encode "$password")"
+    return 0
+  fi
+
+  rm -rf "$reply_dir"
+  printf 'ERR 83886179 Operation cancelled\n'
+}
+
+printf 'OK Pleased to meet you\n'
+while IFS= read -r line; do
+  command=${line%% *}
+  argument=""
+  [[ $line == *" "* ]] && argument=${line#* }
+
+  case "$command" in
+    OPTION|SETKEYINFO|SETOK|SETCANCEL|SETNOTOK|SETREPEAT|SETREPEATERROR|SETQUALITYBAR|SETQUALITYBAR_TT|SETGENPIN|SETGENPIN_TT|SETTIMEOUT|SETERROR)
+      printf 'OK\n'
+      ;;
+    SETTITLE)
+      title=$(decode "$argument")
+      printf 'OK\n'
+      ;;
+    SETDESC)
+      description=$(decode "$argument")
+      printf 'OK\n'
+      ;;
+    SETPROMPT)
+      prompt=$(decode "$argument")
+      printf 'OK\n'
+      ;;
+    GETINFO)
+      case "$argument" in
+        flavor) printf 'D omarchy\nOK\n' ;;
+        version) printf 'D 1.1\nOK\n' ;;
+        *) printf 'ERR 67109139 Unknown information\n' ;;
+      esac
+      ;;
+    GETPIN)
+      reply
+      ;;
+    BYE)
+      printf 'OK closing connection\n'
+      exit 0
+      ;;
+    *)
+      printf 'ERR 67109139 Unknown command\n'
+      ;;
+  esac
+done

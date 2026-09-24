@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "coelebs.pinentry",
+  "name": "Pinentry",
+  "version": "1.1.0",
+  "author": "Vincent Kriek",
+  "description": "Omarchy-styled pinentry dialog for rbw and gpg-agent",
+  "homepage": "https://github.com/coelebs/pinentry-omarchy",
+  "license": "MIT",
+  "kinds": ["panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "Panel.qml"
+  }
+}
