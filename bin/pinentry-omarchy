@@ -7,6 +7,19 @@ title="Authentication"
 description=""
 prompt="Enter password"
 reply_program="$(dirname "$0")/pinentry-omarchy-reply"
+timeout=300
+
+while (( $# > 0 )); do
+  case $1 in
+    --timeout) timeout=$2; shift ;;
+    --timeout=*) timeout=${1#--timeout=} ;;
+  esac
+  shift
+done
+
+expired() {
+  (( timeout > 0 )) && (( SECONDS >= timeout ))
+}
 
 if ! command -v jq >/dev/null 2>&1; then
   printf 'ERR 83886179 Operation cancelled\njq is required by pinentry-omarchy\n' 2>&1
@@ -26,37 +39,43 @@ encode() {
   printf '%s' "$value"
 }
 
-reply() {
-  local reply_dir reply_file password status summon_result payload
-  reply_dir=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/pinentry-omarchy.XXXXXX") || return 1
-  reply_file="$reply_dir/reply"
-  payload=$(jq -cn \
-    --arg replyFile "$reply_file" \
-    --arg replyProgram "$reply_program" \
-    --arg title "$title" \
-    --arg description "$description" \
-    --arg prompt "$prompt" \
-    '{replyFile: $replyFile, replyProgram: $replyProgram, title: $title, description: $description, prompt: $prompt}') || {
-      rm -rf "$reply_dir"
-      return 1
-    }
-
-  summon_result=$(omarchy-shell shell summon coelebs.pinentry "$payload" 2>/dev/null)
-  status=$?
-  while [[ $status -eq 0 && $summon_result == "ok" && ! -f $reply_file ]]; do
-    sleep 0.05
-  done
-
-  if [[ $status -eq 0 && -f $reply_file ]]; then
-    password=$(<"$reply_file")
+  cancelled() {
     rm -rf "$reply_dir"
-    printf 'D %s\nOK\n' "$(encode "$password")"
-    return 0
-  fi
+    printf 'ERR 83886179 Operation cancelled\n'
+  }
 
-  rm -rf "$reply_dir"
-  printf 'ERR 83886179 Operation cancelled\n'
-}
+  reply() {
+    local reply_dir reply_file password status summon_result payload
+    reply_dir=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/pinentry-omarchy.XXXXXX") || return 1
+    reply_file="$reply_dir/reply"
+    payload=$(jq -cn \
+      --arg replyFile "$reply_file" \
+      --arg replyProgram "$reply_program" \
+      --arg title "$title" \
+      --arg description "$description" \
+      --arg prompt "$prompt" \
+      '{replyFile: $replyFile, replyProgram: $replyProgram, title: $title, description: $description, prompt: $prompt}') || {
+        rm -rf "$reply_dir"
+        return 1
+      }
+
+    summon_result=$(omarchy-shell shell summon coelebs.pinentry "$payload" 2>/dev/null)
+    status=$?
+    while [[ $status -eq 0 && $summon_result == "ok" && ! -f $reply_file ]] && ! expired; do
+      sleep 0.05
+    done
+
+    # An existing reply file means the dialog answered; an EMPTY reply means
+    # the dialog was dismissed (Escape) and the caller sees a cancellation.
+    if [[ $status -eq 0 && $summon_result == "ok" && -f $reply_file && -s $reply_file ]]; then
+      password=$(<"$reply_file")
+      rm -rf "$reply_dir"
+      printf 'D %s\nOK\n' "$(encode "$password")"
+      return 0
+    fi
+
+    cancelled
+  }
 
 printf 'OK Pleased to meet you\n'
 while IFS= read -r line; do

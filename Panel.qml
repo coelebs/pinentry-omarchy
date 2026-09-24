@@ -15,6 +15,7 @@ Item {
   property string prompt: "Enter password"
   property string responseFile: ""
   property string responseProgram: ""
+  property bool submitted: false
   property color accent: Color.polkit.accent
   property color background: Color.polkit.background
   property color foreground: Color.polkit.text
@@ -34,17 +35,31 @@ Item {
     title = String(data.title || "Authentication")
     description = String(data.description || "")
     prompt = String(data.prompt || "Enter password")
+    submitted = false
     passwordInput.text = ""
     opened = true
     Qt.callLater(function() { passwordInput.forceActiveFocus() })
   }
 
+  // Cancel contract: a dismiss without submit still writes an EMPTY reply
+  // file so the waiting caller returns "Operation cancelled" instead of
+  // polling forever. Empty passwords are treated as cancel by the caller.
   function close() {
+    if (opened && !submitted && responseFile !== "" && responseProgram !== "" && !responseWriter.running) {
+      cancel()
+    }
     opened = false
     passwordInput.text = ""
   }
 
+  function cancel() {
+    responseWriter.environment = ({ "PINENTRY_REPLY": "", "PINENTRY_RESPONSE_FILE": responseFile })
+    responseWriter.command = [responseProgram]
+    responseWriter.running = true
+  }
+
   function submit() {
+    submitted = true
     responseWriter.environment = ({ "PINENTRY_REPLY": passwordInput.text, "PINENTRY_RESPONSE_FILE": responseFile })
     responseWriter.command = [responseProgram]
     responseWriter.running = true
@@ -109,7 +124,11 @@ Item {
             echoMode: TextInput.Password
             passwordCharacter: "*"
             color: root.foreground
+            // onAccepted alone is unreliable on quickshell alphas: Enter
+            // arrives as a plain key event, so handle Keys too.
             onAccepted: root.submit()
+            Keys.onEnterPressed: root.submit()
+            Keys.onReturnPressed: root.submit()
             Keys.onEscapePressed: root.close()
           }
           Text {
@@ -153,6 +172,9 @@ Item {
 
   Process {
     id: responseWriter
-    onExited: root.close()
+    onExited: (exitCode, exitStatus) => {
+      if (exitCode !== 0) console.warn("[pinentry] reply program exited", exitCode, exitStatus)
+      root.close()
+    }
   }
 }
